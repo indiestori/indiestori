@@ -1,3 +1,4 @@
+require('dotenv').config();
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -6,6 +7,7 @@ import { CustomerOrders } from './entities/orders.entity';
 import { User } from 'src/user/user.entity';
 import { Product } from 'src/shop/entities/product.entity';
 import { ProductSize } from 'src/shop/entities/product-size.entity';
+import * as sgMail from '@sendgrid/mail';
 
 const Razorpay = require('razorpay');
 @Injectable()
@@ -164,5 +166,60 @@ export class OrdersService {
       relations: ['items'],
     });
     return orders;
-}
+  }
+
+  async emailService(body: any) {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
+    console.log('emailservice called');
+   // const currentDate = new Date().toLocaleString();
+    const currentDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+    const ComfirmOrder_msg = {
+      to: `${body.recipient}`, // Change to your recipient
+      from: 'orders@indiestori.com', // Change to your verified sender
+      subject: 'Your order is confirmed',
+      text: 'and easy to do anywhere, even with Node.js',
+      html: `<div style="font-family: inherit; text-align: inherit">Dear ${body.recipientName},<br>
+        <br>
+        Thank you for shopping with us!<br>
+        <br>
+        We are thrilled to confirm that your ${body.OrderId} has been successfully placed. Below are the details of your order:<br>
+        <br>
+        Order Summary:<br>
+        <br>
+        - Order Date: ${currentDate}<br>
+        - Order Number: ${body.OrderId}<br>
+        - Total Amount: Rs. ${body.OrderAmount}<br>
+        - Payment Method: ${body.PaymentMethod}<br>
+        Order Items:<br>
+        <ul>
+        ${body.OrderItems.map(
+          (item) => `
+          <li>
+            Product Name: ${item.name}<br>
+            Quantity: ${item.quantity}<br>
+            Price: ${item.discountprice}<br>
+          </li>
+        `,
+        ).join('')}
+        </ul>
+        Shipping Address: ${body.OrderAddress}<br>
+        <br>
+        Thank you for choosing us! Our team will process your order promptly.<br>
+        <br>
+        Best regards,</div>
+        <div style="font-family: inherit; text-align: inherit">Indie Stori</div>`,
+    };
+
+    console.log(ComfirmOrder_msg);
+    try {
+      await sgMail.send(ComfirmOrder_msg);
+      console.log('Email sent');
+      return { success: true, message: 'Email sent successfully' };
+    } catch (error) {
+      console.error(error);
+      return { success: false, message: 'Failed to send email', error };
+    }
+  }
 }

@@ -21,7 +21,7 @@ export class CustomerOrders {
     @Column({ nullable: true })
     razorpayOrderId: string | null;
 
-    @Column({default:"failed", nullable:true})
+    @Column({default:"awaiting", nullable:true})
     paymentStatus:string;
 
     @Column({default:"placed", nullable:true})

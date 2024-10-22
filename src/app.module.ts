@@ -24,10 +24,10 @@ import { ProductSize } from './shop/entities/product-size.entity';
     host: '127.0.0.1',
     port: 3306,
     username: 'root',
-    password: 'mrityunjaymanas',
+    password: 'Htrap@1234',
     database: 'production',
     entities: [Product, User, Cart, CartItem, CustomerOrders, OrderItem,ProductSize],
-    synchronize: true  //only to use in development enviornment NEVER IN production
+    synchronize: true,  //only to use in development enviornment NEVER IN production
   }), CartModule, UserModule, AdminModule, OrdersModule],
   exports: [TypeOrmModule],
 })

@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post } from '@nestjs/common';
 import { OrderDto } from './dtos/CreateOrder.dto';
 import { OrdersService } from './orders.service';
 
+
 @Controller('orders')
 export class OrdersController {
     constructor(private readonly OrderRepository: OrdersService){}
@@ -28,6 +29,11 @@ export class OrdersController {
     @Post('fetchorders')
     async fetchorders(@Body() body:any){
         return await this.OrderRepository.fetchOrders(body);
+    }
+
+    @Post('emailservice')
+    async sendConfirmEmail(@Body() body:any){
+        return await this.OrderRepository.emailService(body);
     }
 
 }
