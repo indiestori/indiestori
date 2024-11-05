@@ -11,6 +11,25 @@ class CreateProductSizeDto {
   @IsOptional()
   @IsNumber()
   discountPrice: number;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsUrl({}, { each: true })  // Optional: To validate each string as a valid URL
+  imageUrl: string[];
+}
+
+class CreateReviewDto {
+  @IsString()
+  name: string;
+
+  @IsString()
+  title: string;
+
+  @IsString()
+  description: string;
+
+  @IsNumber()
+  rating: number; // Assuming rating is a numeric value
 }
 
 export class CreateProductDto {
@@ -52,11 +71,11 @@ export class CreateProductDto {
   @Type(() => CreateProductSizeDto)
   sizes: CreateProductSizeDto[];
 
-  @IsArray()
-  @IsString({ each: true })
-  @IsUrl({}, { each: true })  // Optional: To validate each string as a valid URL
-  imageUrl: string[];
-
   @IsString()
   bannerUrl: string;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateReviewDto)
+  reviews: CreateReviewDto[]; // Add the reviews array
 }

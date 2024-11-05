@@ -15,6 +15,9 @@ export class ProductSize {
   @Column('decimal', { precision: 10, scale: 2, nullable: true })
   discountPrice: number;
 
+  @Column('simple-array', { nullable: true }) // Add imageUrl array here
+  imageUrl: string[];
+
   @ManyToOne(() => Product, (product) => product.sizes, { onDelete: 'CASCADE' })
   product: Product;
 }

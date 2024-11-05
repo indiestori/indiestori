@@ -113,7 +113,7 @@ export class OrdersService {
         price: productSizeInfo.discountPrice,
         quantity: item.quantity,
         totalPrice: item.quantity * productSizeInfo.discountPrice,
-        imageUrl: product.imageUrl[0],
+        imageUrl: productSizeInfo.imageUrl[0],
       });
 
       return orderItem;

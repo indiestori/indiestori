@@ -4,9 +4,10 @@ import { ShopController } from './shop.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Product } from './entities/product.entity';
 import { ProductSize } from './entities/product-size.entity';
+import { Review } from './entities/product-review.entity';
 
 @Module({
-  imports:[TypeOrmModule.forFeature([Product,ProductSize])],
+  imports:[TypeOrmModule.forFeature([Product,ProductSize,Review])],
   providers: [ShopService],
   controllers: [ShopController],
 })

@@ -1,6 +1,7 @@
 import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from 'typeorm';
 import { ProductSize } from './product-size.entity'; // Import the ProductSize entity
 import { Transform } from 'class-transformer';
+import { Review } from './product-review.entity';
 
 @Entity()
 export class Product {
@@ -40,14 +41,14 @@ export class Product {
   @Column({ default: 'www.google.com' })
   video2: string;
 
-  @Column('simple-array')
-  imageUrl: string[];
-
   @Column()
   bannerUrl: string;
 
   @OneToMany(() => ProductSize, (productSize) => productSize.product, { cascade: true })
   sizes: ProductSize[];
+
+  @OneToMany(() => Review, (review) => review.product, { cascade: true })
+  reviews: Review[];
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   @Transform(({ value }) => value.toISOString())
