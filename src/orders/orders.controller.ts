@@ -36,4 +36,9 @@ export class OrdersController {
         return await this.OrderRepository.emailService(body);
     }
 
+    @Post('emailtoclient')
+    async sendEmailToClient(@Body() body:any){
+        return await this.OrderRepository.emailServiceToOwner(body);
+    }
+
 }

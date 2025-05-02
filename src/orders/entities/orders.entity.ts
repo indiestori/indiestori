@@ -21,9 +21,24 @@ export class CustomerOrders {
     @Column({ nullable: true })
     razorpayOrderId: string | null;
 
+    @Column({ nullable: true })
+    razorpayPaymentId: string | null;
+
+    @Column({ nullable: true })
+    razorpaySignature: string | null;
+
+    @Column({ nullable: true })
+    shipmentId: string | null;
+
+    @Column({ nullable: true })
+    awbCode: string | null;
+
     @Column({default:"awaiting", nullable:true})
     paymentStatus:string;
 
     @Column({default:"placed", nullable:true})
     orderStatus:string;
+
+    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+    orderDate: Date;
 }

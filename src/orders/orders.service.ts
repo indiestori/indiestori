@@ -2,12 +2,13 @@ require('dotenv').config();
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import {OrderItem} from './entities/orderitem.entity';
+import { OrderItem } from './entities/orderitem.entity';
 import { CustomerOrders } from './entities/orders.entity';
 import { User } from 'src/user/user.entity';
 import { Product } from 'src/shop/entities/product.entity';
 import { ProductSize } from 'src/shop/entities/product-size.entity';
 import * as sgMail from '@sendgrid/mail';
+import * as crypto from 'crypto';
 
 const Razorpay = require('razorpay');
 @Injectable()
@@ -34,7 +35,6 @@ export class OrdersService {
       key_secret: process.env.RAZORPAY_API_KEY_SECRET,
     });
   }
-  
 
   // Method to authenticate with Shiprocket and get a new token
   async getShiprocketToken() {
@@ -67,233 +67,235 @@ export class OrdersService {
   }
 
   async createOrder(firebaseUid: string | null, items: any[], OrderInfo: any) {
-  const orderObject = {
-    Name: `${OrderInfo.firstName} ${OrderInfo.lastName}`,
-    CompanyName: OrderInfo.companyName || null,
-    Country: OrderInfo.country,
-    StreetAddress: `${OrderInfo.streetAddress}, ${OrderInfo.apartment || ''}`,
-    City: OrderInfo.city,
-    State: OrderInfo.state,
-    Pincode: OrderInfo.pinCode,
-    PaymentMethod: OrderInfo.paymentMethod,
-    Phone: OrderInfo.phone,
-    Email: OrderInfo.email,
-    OrderNotes: OrderInfo.orderNotes || null,
-  };
+    const orderObject = {
+      Name: `${OrderInfo.firstName} ${OrderInfo.lastName}`,
+      CompanyName: OrderInfo.companyName || null,
+      Country: OrderInfo.country,
+      StreetAddress: `${OrderInfo.streetAddress}, ${OrderInfo.apartment || ''}`,
+      City: OrderInfo.city,
+      State: OrderInfo.state,
+      Pincode: OrderInfo.pinCode,
+      PaymentMethod: OrderInfo.paymentMethod,
+      Phone: OrderInfo.phone,
+      Email: OrderInfo.email,
+      OrderNotes: OrderInfo.orderNotes || null,
+    };
 
-  this.logger.log(orderObject);
+    this.logger.log(orderObject);
 
-  const allProducts = await Promise.all(
-    items.map(async (item: any) => {
-      this.logger.log(item);
+    const allProducts = await Promise.all(
+      items.map(async (item: any) => {
+        this.logger.log(item);
 
-      const product = await this.productRepository.findOne({
-        where: { id: item.productId },
-        relations: ['sizes'],
-      });
+        const product = await this.productRepository.findOne({
+          where: { id: item.productId },
+          relations: ['sizes'],
+        });
 
-      if (!product) {
-        throw new Error(`Product not found for ID ${item.productId}`);
-      }
+        if (!product) {
+          throw new Error(`Product not found for ID ${item.productId}`);
+        }
 
-      const productSizeInfo = product.sizes.find(
-        (size) => size.size === item.size,
-      );
-
-      if (!productSizeInfo) {
-        throw new Error(
-          `Product size not found for product ID ${item.productId} and size ${item.size}`,
+        const productSizeInfo = product.sizes.find(
+          (size) => size.size === item.size,
         );
-      }
 
-      const orderItem = this.orderItemRepository.create({
-        productId: product.id,
-        name: product.name,
-        size: productSizeInfo.size,
-        price: productSizeInfo.discountPrice,
-        quantity: item.quantity,
-        totalPrice: item.quantity * productSizeInfo.discountPrice,
-        imageUrl: productSizeInfo.imageUrl[0],
-      });
+        if (!productSizeInfo) {
+          throw new Error(
+            `Product size not found for product ID ${item.productId} and size ${item.size}`,
+          );
+        }
 
-      return orderItem;
-    }),
-  );
+        const orderItem = this.orderItemRepository.create({
+          productId: product.id,
+          name: product.name,
+          size: productSizeInfo.size,
+          price: productSizeInfo.discountPrice,
+          quantity: item.quantity,
+          totalPrice: item.quantity * productSizeInfo.discountPrice,
+          imageUrl: productSizeInfo.imageUrl[0],
+        });
 
-  // Handle final amount and additional charges
-  let finalAmount = 0;
-  if (orderObject.PaymentMethod == 'cashOnDelivery') {
-    finalAmount = allProducts.reduce(
-      (acc, product) => acc + product.totalPrice + 25,
-      0,
+        return orderItem;
+      }),
     );
-  } else {
-    finalAmount = allProducts.reduce(
-      (acc, product) => acc + product.totalPrice,
-      0,
-    );
+    // Calculate the total quantity of all items
+    const totalQuantity = items.reduce((acc, item) => acc + item.quantity, 0);
+
+    // Handle final amount and additional charges
+    let finalAmount = 0;
+    if (orderObject.PaymentMethod == 'cashOnDelivery') {
+      finalAmount = allProducts.reduce(
+        (acc, product) => acc + product.totalPrice,
+        0,
+      );
+      finalAmount += 25
+    } else {
+      finalAmount = allProducts.reduce(
+        (acc, product) => acc + product.totalPrice,
+        0,
+      );
+    }
+    const shipmentCharges = process.env.SHIPMENT_CHARGES;
+    const noOfProducts = process.env.NO_OF_PRODUCTS;
+
+    const totalAmountBeforeShipping = parseInt(finalAmount.toFixed(0));
+
+    const totalAmountAfterShipping =
+      totalQuantity <= parseInt(noOfProducts)
+        ? totalAmountBeforeShipping + parseFloat(shipmentCharges)
+        : totalAmountBeforeShipping;
+
+    let razorpayOrderId: string | null = null;
+    const cashOnDeliveryCharges = process.env.CASH_ON_DELIVERY_CHARGES;
+
+    // Create the order in Razorpay
+    const razorpayOrder = await this.razorpay.orders.create({
+      amount:
+        OrderInfo.paymentMethod === 'cashOnDelivery'
+          ? parseFloat(cashOnDeliveryCharges) * 100
+          : totalAmountAfterShipping * 100, // Amount in the smallest currency unit (paise for INR)
+      currency: 'INR',
+      receipt: `order_${Date.now()}`,
+    });
+
+    razorpayOrderId = razorpayOrder.id;
+
+    const order = this.orderRepository.create({
+      firebaseUid,
+      orderInfo: orderObject,
+      items: allProducts,
+      totalAmount: totalAmountAfterShipping,
+      razorpayOrderId,
+    });
+
+    const result = await this.orderRepository.save(order);
+
+    // Check if payment method is COD and create shipment
+    if (OrderInfo.paymentMethod === 'cashOnDelivery') {
+      const shiprocketShipment = await this.createShiprocketShipment(
+        order,
+        allProducts,
+      );
+      // order.shipmentTrackingId = shiprocketShipment.tracking_id; // Adjust based on Shiprocket response
+      // await this.orderRepository.save(order);
+    }
+
+    return { result, razorpayOrderId };
   }
-
-  const taxPercentage = process.env.TAX_PERCENTAGE;
-  const shipmentCharges = process.env.SHIPMENT_CHARGES;
-  const noOfProducts = process.env.NO_OF_PRODUCTS;
-
-  const totalAmountBeforeShipping = parseInt(
-    (finalAmount + finalAmount * parseFloat(taxPercentage)).toFixed(0),
-  );
-
-  const totalAmountAfterShipping =
-    items.length <= parseInt(noOfProducts)
-      ? totalAmountBeforeShipping + parseFloat(shipmentCharges)
-      : totalAmountBeforeShipping;
-
-  let razorpayOrderId: string | null = null;
-  const cashOnDeliveryCharges = process.env.CASH_ON_DELIVERY_CHARGES;
-
-  // Create the order in Razorpay
-  const razorpayOrder = await this.razorpay.orders.create({
-    amount:
-      OrderInfo.paymentMethod === 'cashOnDelivery'
-        ? parseFloat(cashOnDeliveryCharges) * 100
-        : totalAmountAfterShipping * 100, // Amount in the smallest currency unit (paise for INR)
-    currency: 'INR',
-    receipt: `order_${Date.now()}`,
-  });
-
-  razorpayOrderId = razorpayOrder.id;
-
-  const order = this.orderRepository.create({
-    firebaseUid,
-    orderInfo: orderObject,
-    items: allProducts,
-    totalAmount: totalAmountAfterShipping,
-    razorpayOrderId,
-  });
-
-  const result = await this.orderRepository.save(order);
-
-  // Check if payment method is COD and create shipment
-  if (OrderInfo.paymentMethod === 'cashOnDelivery') {
-    const shiprocketShipment = await this.createShiprocketShipment(order, allProducts);
-    // order.shipmentTrackingId = shiprocketShipment.tracking_id; // Adjust based on Shiprocket response
-    // await this.orderRepository.save(order);
-  }
-
-  return { result, razorpayOrderId };
-}
-
 
   // Method to confirm payment and trigger shipment creation via Shiprocket
   async confirmPayment(paymentDetails: any) {
-    const { razorpayOrderId,items } = paymentDetails;
+    const { razorpayOrderId, razorpayPaymentId, razorpaySignature, items } = paymentDetails;
     const order = await this.orderRepository.findOneBy({ razorpayOrderId });
 
     if (!order) {
       throw new Error('Order not found');
     }
 
-        // Confirm payment
-        order.paymentStatus = 'confirmed';
-    await this.orderRepository.save(order);
-    console.log("items",order)
-    // Create a shipment via Shiprocket API
-    const shiprocketShipment = await this.createShiprocketShipment(order,items);
+    // Verify Razorpay payment
+    const generatedSignature = crypto
+      .createHmac('sha256', process.env.RAZORPAY_API_KEY_SECRET)
+      .update(razorpayOrderId + '|' + razorpayPaymentId)
+      .digest('hex');
 
-    return { success: true };
+    if (generatedSignature !== razorpaySignature) {
+      throw new Error('Invalid payment signature');
+    }
+
+    // Confirm payment
+    order.paymentStatus = 'confirmed';
+    order.razorpayPaymentId = razorpayPaymentId;
+    order.razorpaySignature = razorpaySignature;
+    await this.orderRepository.save(order);
+    
+    // Create a shipment via Shiprocket API
+    const shiprocketShipment = await this.createShiprocketShipment(
+      order,
+      items,
+    );
+
+    return { success: true, message: 'Payment verified and order confirmed successfully' };
   }
 
   // Method to call Shiprocket's API and create a shipment
-// Method to call Shiprocket's API and create a shipment
-// Method to call Shiprocket's API and create a shipment
-async createShiprocketShipment(order: any, items: any[]) {
-  const baseUrl = 'https://apiv2.shiprocket.in/v1/external/orders/create/adhoc';
+  async createShiprocketShipment(order: any, items: any[]) {
+    const baseUrl =
+      'https://apiv2.shiprocket.in/v1/external/orders/create/adhoc';
 
-  const token = await this.getShiprocketToken();
-  this.logger.log("Creating shipment for order:", order);
+    const token = await this.getShiprocketToken();
+    this.logger.log('Creating shipment for order:', order);
 
-  // Adjust dimensions and weight based on product name and size
-  let totalWeight = 0;
-  let length = 10; // Default
-  let breadth = 10; // Default
-  let height = 10; // Default
+    // Adjust dimensions and weight based on product name and size
+    let totalWeight = 0;
+    let length = 10; // Default
+    let breadth = 10; // Default
+    let height = 10; // Default
 
-  const orderItems = items.map((item) => {
-    let packageDimensions = { length: 10, breadth: 10, height: 10, weight: 0.5 }; // Default values
+    const orderItems = items.map((item) => {
+      let packageDimensions = {
+        length: 10,
+        breadth: 10,
+        height: 10,
+        weight: 0.5,
+      }; // Default values
 
-    // Check if the product is honey
-    if (item.name.toLowerCase().includes('honey')) {
-      if (item.size <= 600) {
-        packageDimensions = { length: 20, breadth: 13, height: 11, weight: 0.75 }; // 750 gm
-      } else {
-        packageDimensions = { length: 26, breadth: 12, height: 11, weight: 1.4 }; // 1400 gm
+      // Check if the product is honey
+      if (item.name.toLowerCase().includes('honey')) {
+        if (item.size <= 600) {
+          packageDimensions = {
+            length: 20,
+            breadth: 13,
+            height: 11,
+            weight: 0.75,
+          }; // 750 gm
+        } else {
+          packageDimensions = {
+            length: 26,
+            breadth: 12,
+            height: 11,
+            weight: 1.4,
+          }; // 1400 gm
+        }
       }
-    }
 
-    // Check if the product is turmeric or salt
-    if (item.name.toLowerCase().includes('turmeric') || item.name.toLowerCase().includes('salt')) {
-      packageDimensions = { length: 14, breadth: 11, height: 9, weight: 0.4 }; // 400 gm
-    }
+      // Check if the product is turmeric or salt
+      if (
+        item.name.toLowerCase().includes('turmeric') ||
+        item.name.toLowerCase().includes('salt')
+      ) {
+        packageDimensions = { length: 14, breadth: 11, height: 9, weight: 0.4 }; // 400 gm
+      }
 
-    // Update total weight for the shipment
-    totalWeight += packageDimensions.weight;
+      // Update total weight for the shipment
+      totalWeight += packageDimensions.weight;
 
-    // Use the largest dimension among all items as the overall package dimension
-    length = Math.max(length, packageDimensions.length);
-    breadth = Math.max(breadth, packageDimensions.breadth);
-    height = Math.max(height, packageDimensions.height);
+      // Use the largest dimension among all items as the overall package dimension
+      length = Math.max(length, packageDimensions.length);
+      breadth = Math.max(breadth, packageDimensions.breadth);
+      height = Math.max(height, packageDimensions.height);
 
-    // Return the order items with updated dimensions
-    return {
-      name: item.name,
-      sku: item.productId,
-      units: item.quantity,
-      selling_price: item.price > 0 ? item.price : 1, // Ensure selling price is not zero
-      discount: 0,
-      tax: 0,
-    };
-  });
+      // Return the order items with updated dimensions
+      return {
+        name: item.name,
+        sku: item.productId,
+        units: item.quantity,
+        selling_price: item.price > 0 ? item.price : 1, // Ensure selling price is not zero
+        discount: 0,
+        tax: 0,
+      };
+    });
 
-  // Determine the shipping charges based on the number of items
-  const shippingCharges = items.length > parseFloat(process.env.NO_OF_PRODUCTS) ? 0 : parseFloat(process.env.SHIPMENT_CHARGES);
+    // Determine the shipping charges based on the number of items
+    const shippingCharges =
+      items.length > parseFloat(process.env.NO_OF_PRODUCTS)
+        ? 0
+        : parseFloat(process.env.SHIPMENT_CHARGES);
 
-  this.logger.log("test",{
-    order_id: order.razorpayOrderId,
-    order_date: new Date().toISOString().split('T')[0],
-    pickup_location: "warehouse",
-    channel_id: 3815733,
-    billing_customer_name: order.orderInfo.Name,
-    billing_last_name: '',
-    billing_address: order.orderInfo.StreetAddress,
-    billing_city: order.orderInfo.City,
-    billing_pincode: order.orderInfo.Pincode,
-    billing_state: order.orderInfo.State,
-    billing_country: order.orderInfo.Country,
-    billing_email: order.orderInfo.Email,
-    billing_phone: order.orderInfo.Phone,
-    shipping_is_billing: true,
-    order_items: orderItems,
-    payment_method: order.orderInfo.PaymentMethod === 'cashOnDelivery' ? 'COD' : 'Prepaid',
-    shipping_charges: shippingCharges,
-    giftwrap_charges: 0,
-    transaction_charges: 0,
-    total_discount: 0,
-    sub_total: order.totalAmount - shippingCharges,
-    weight: totalWeight, // Total weight of the shipment
-    length: length,      // Max length from all items
-    breadth: breadth,    // Max breadth from all items
-    height: height,      // Max height from all items
-  })
-  // Make the API request to Shiprocket
-  const response = await fetch(baseUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
+    const shipmentData = {
       order_id: order.razorpayOrderId,
       order_date: new Date().toISOString().split('T')[0],
-      pickup_location: "warehouse",
+      pickup_location: 'warehouse',
       channel_id: 3815733,
       billing_customer_name: order.orderInfo.Name,
       billing_last_name: '',
@@ -306,36 +308,62 @@ async createShiprocketShipment(order: any, items: any[]) {
       billing_phone: order.orderInfo.Phone,
       shipping_is_billing: true,
       order_items: orderItems,
-      payment_method: order.orderInfo.PaymentMethod === 'cashOnDelivery' ? 'COD' : 'Prepaid',
+      payment_method:
+        order.orderInfo.PaymentMethod === 'cashOnDelivery' ? 'COD' : 'Prepaid',
       shipping_charges: shippingCharges,
       giftwrap_charges: 0,
       transaction_charges: 0,
       total_discount: 0,
       sub_total: order.totalAmount - shippingCharges,
       weight: totalWeight, // Total weight of the shipment
-      length: length,      // Max length from all items
-      breadth: breadth,    // Max breadth from all items
-      height: height,      // Max height from all items
-    }),
-  });
+      length: length, // Max length from all items
+      breadth: breadth, // Max breadth from all items
+      height: height, // Max height from all items
+    };
 
-  if (!response.ok) {
-    const errorData = await response.json();
-    this.logger.error("Shiprocket API Error:", errorData);
-    throw new Error(`Failed to create shipment: ${errorData.message}`);
+    try {
+      // Make the API request to Shiprocket
+      const response = await fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(shipmentData)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        this.logger.error('Shiprocket API error:', errorData);
+        throw new Error(`Shiprocket API error: ${JSON.stringify(errorData)}`);
+      }
+
+      const shipmentResponse = await response.json();
+      
+      // Update order with shipment details
+      order.shipmentId = shipmentResponse.shipment_id;
+      order.awbCode = shipmentResponse.awb_code;
+      await this.orderRepository.save(order);
+
+      return { 
+        success: true, 
+        shipmentId: shipmentResponse.shipment_id,
+        awbCode: shipmentResponse.awb_code,
+        message: 'Shipment created successfully'
+      };
+    } catch (error) {
+      this.logger.error('Error creating shipment:', error);
+      throw new Error('Failed to create shipment: ' + error.message);
+    }
   }
-
-  const shipment = await response.json();
-  this.logger.log("Shiprocket Shipment Response:", shipment);
-
-  return {success:true}
-}
-
 
   async fetchOrders(objectinput: any) {
     // firebaseUid1.toString().trim();
     const orders = await this.orderRepository.find({
-      where: { firebaseUid: objectinput.firebaseUid, paymentStatus: "confirmed" },
+      where: {
+        firebaseUid: objectinput.firebaseUid,
+        paymentStatus: 'confirmed',
+      },
       relations: ['items'],
     });
     return orders;
@@ -345,8 +373,10 @@ async createShiprocketShipment(order: any, items: any[]) {
     sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
     console.log('emailservice called');
-   // const currentDate = new Date().toLocaleString();
-    const currentDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+    // const currentDate = new Date().toLocaleString();
+    const currentDate = new Date().toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+    });
 
     const ComfirmOrder_msg = {
       to: `${body.recipient}`, // Change to your recipient
@@ -368,14 +398,14 @@ async createShiprocketShipment(order: any, items: any[]) {
         Order Items:<br>
         <ul>
         ${body.OrderItems.map(
-          (item) => `
+        (item) => `
           <li>
             Product Name: ${item.name}<br>
             Quantity: ${item.quantity}<br>
             Price: ${item.discountprice}<br>
           </li>
         `,
-        ).join('')}
+      ).join('')}
         </ul>
         Shipping Address: ${body.OrderAddress}<br>
         <br>
@@ -385,10 +415,61 @@ async createShiprocketShipment(order: any, items: any[]) {
         <div style="font-family: inherit; text-align: inherit">Indie Stori</div>`,
     };
 
-    console.log(ComfirmOrder_msg);
+    // console.log(ComfirmOrder_msg);
     try {
-      await sgMail.send(ComfirmOrder_msg);
-      console.log('Email sent');
+      const res = await sgMail.send(ComfirmOrder_msg);
+      console.log('Email sent', res);
+      return { success: true, message: 'Email sent successfully' };
+    } catch (error) {
+      console.error(error);
+      return { success: false, message: 'Failed to send email', error };
+    }
+  }
+
+  async emailServiceToOwner(body: any) {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
+    // const currentDate = new Date().toLocaleString();
+    const currentDate = new Date().toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+    });
+
+    const ComfirmOrder_msg = {
+      to: `choudharyanuj1712@gmail.com`, // Change to your recipient
+      from: 'orders@indiestori.com', // Change to your verified sender
+      subject: 'New Order Notification',
+      text: 'and easy to do anywhere, even with Node.js',
+      html: `<div style="font-family: inherit; text-align: inherit">
+        <p>A new order has been placed. Here are the details:</p>
+    <p><strong>Customer Name:</strong> ${body.recipientName}</p>
+    <p><strong>Email:</strong> ${body.recipient}</p>
+    <p><strong>Phone:</strong> ${body.phone}</p></br>
+        Order Summary:<br>
+        <br>
+        - Order Date: ${currentDate}<br>
+        - Order Number: ${body.OrderId}<br>
+        - Total Amount: Rs. ${body.OrderAmount}<br>
+        - Payment Method: ${body.PaymentMethod}<br>
+        Order Items:<br>
+        <ul>
+        ${body.OrderItems.map(
+        (item) => `
+          <li>
+            Product Name: ${item.name}<br>
+            Quantity: ${item.quantity}<br>
+            Price: ${item.discountprice}<br>
+          </li>
+        `,
+      ).join('')}
+        </ul>
+        Shipping Address: ${body.OrderAddress}<br>
+        <div style="font-family: inherit; text-align: inherit">Indie Stori</div>`,
+    };
+
+    // console.log(ComfirmOrder_msg);
+    try {
+      const res = await sgMail.send(ComfirmOrder_msg);
+      console.log('Email sent', res);
       return { success: true, message: 'Email sent successfully' };
     } catch (error) {
       console.error(error);
